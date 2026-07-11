@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Environments
+.env
+.venv
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Model weights (too large for git)
+models/*.pt
+models/*.pth
+
+# Output (training results, evaluation)
+output/
+
+# Generated data (can be regenerated with scripts)
+data/raw/
+data/augmented/
+data/labels/

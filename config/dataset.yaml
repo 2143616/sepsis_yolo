@@ -1,0 +1,7 @@
+# YOLOv8 数据集配置 — 8类异常细胞检测
+path: /home/hyl/project/sepsis_yolo/data
+train: augmented
+val: augmented
+nc: 8
+names: ["abnormal1", "abnormal2", "abnormal3", "abnormal4",
+        "abnormal5", "abnormal6", "abnormal7", "abnormal8"]
