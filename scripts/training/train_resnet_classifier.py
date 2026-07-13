@@ -49,11 +49,11 @@ class BloodCellDataset(Dataset):
         self.labels = []
         for p in self.paths:
             if "sepsis_pos" in p.name:
-                # 从文件名确定主导异常类型（用第一个异常标签或随机分配）
-                label_path = Path(str(p).replace("augmented", "labels").replace(".png", ".txt"))
+                # 标签与图片同目录（已移入 augmented/）
+                label_path = p.with_suffix(".txt")
                 if label_path.exists():
                     with open(label_path) as f:
-                        cls_list = [int(l.split()[0]) for l in f if l.strip()]
+                        cls_list = [int(float(l.split()[0])) for l in f if l.strip()]
                     # 该图的主要异常类型 = 出现最多的异常类
                     self.labels.append(max(set(cls_list), key=cls_list.count) if cls_list else 1)
                 else:
@@ -64,8 +64,11 @@ class BloodCellDataset(Dataset):
     def __len__(self): return len(self.paths)
     def __getitem__(self, idx):
         img = cv2.imread(str(self.paths[idx]))
-        img = cv2.resize(img, (224, 224)).transpose(2,0,1).astype(np.float32) / 255.0
-        img = (img - [0.485,0.456,0.406]) / [0.229,0.224,0.225]
+        img = cv2.resize(img, (224, 224)).astype(np.float32) / 255.0
+        img = img.transpose(2, 0, 1)  # HWC -> CHW
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
+        std  = np.array([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
+        img = (img - mean) / std
         return torch.FloatTensor(img), self.labels[idx]
 
 def train():
