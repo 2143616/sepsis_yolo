@@ -20,8 +20,8 @@ def train_yolov8():
     if torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
     
-    # 加载预训练模型
-    model = YOLO("yolov8n.pt")
+    # 加载预训练模型（本地路径，避免重复下载）
+    model = YOLO(str(MODEL_DIR / "yolov8n.pt"))
     
     # 训练
     results = model.train(
