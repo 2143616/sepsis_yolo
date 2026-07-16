@@ -25,4 +25,6 @@ output/
 data/raw/
 data/augmented/
 data/labels/
+data/val/
+data/processed/
 *.cache

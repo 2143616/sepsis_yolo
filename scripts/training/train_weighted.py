@@ -48,13 +48,12 @@ class SepsisDetector:
 
         # 先验加权: 异常类→高权重
         prior_w = PRIOR_WEIGHTS[pred_class]
-        # 如果检测到异常细胞, YOLO 贡献放大
-        yolo_score = min(1.0, n_det / 5.0)
-        # 异常细胞越多, 先验权重影响越大
-        if n_det > 0:
-            prior_w = max(prior_w, max(PRIOR_WEIGHTS[1:]) * 0.8)
+        yolo_score = min(1.0, n_det / 3.0)
+        # ResNet 异常概率贡献
+        rn_abnormal = probs[1:].max().item()
 
-        final_score = 0.5 * yolo_score + 0.4 * prior_w + 0.1 * probs[1:].max().item()
+        # 融合: YOLO 检测 + 先验知识 + ResNet 分类
+        final_score = 0.3 * yolo_score + 0.25 * prior_w + 0.45 * rn_abnormal
 
         result = {
             "sepsis_score": round(final_score, 4),

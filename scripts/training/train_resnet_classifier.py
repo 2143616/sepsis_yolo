@@ -49,12 +49,11 @@ class BloodCellDataset(Dataset):
         self.labels = []
         for p in self.paths:
             if "sepsis_pos" in p.name:
-                # 标签与图片同目录（已移入 augmented/）
                 label_path = p.with_suffix(".txt")
                 if label_path.exists():
                     with open(label_path) as f:
-                        cls_list = [int(float(l.split()[0])) for l in f if l.strip()]
-                    # 该图的主要异常类型 = 出现最多的异常类
+                        # YOLO class 0-7 → ResNet class 1-8
+                        cls_list = [int(float(l.split()[0])) + 1 for l in f if l.strip()]
                     self.labels.append(max(set(cls_list), key=cls_list.count) if cls_list else 1)
                 else:
                     self.labels.append(random.randint(1, 8))
