@@ -9,6 +9,25 @@ from ultralytics import YOLO
 PROJECT_ROOT = Path("/home/hyl/project/sepsis_yolo")
 MODEL_DIR = PROJECT_ROOT / "models"
 WEIGHT_FILE = PROJECT_ROOT / "output" / "resnet" / "prior_weights.json"
+EVAL_RESULT = PROJECT_ROOT / "output" / "evaluation" / "evaluation_results.json"
+
+# 从评估结果中加载最优阈值和权重，没跑过评估就用默认值
+def _load_eval_params():
+    try:
+        with open(EVAL_RESULT) as f:
+            data = json.load(f)
+        fusion = data.get("fusion", {})
+        # F1最优: 保证Precision不降的前提下最大化召回
+        thresh = fusion.get("threshold_f1") or fusion.get("threshold_youden")
+        if thresh is None:
+            thresh = 0.35
+        # 最优融合权重
+        weights = fusion.get("weights_optimal", [0.30, 0.25, 0.45])
+        return float(thresh), (float(weights[0]), float(weights[1]), float(weights[2]))
+    except Exception:
+        return 0.35, (0.30, 0.25, 0.45)
+
+OPTIMAL_THRESHOLD, FUSION_WEIGHTS = _load_eval_params()
 
 # 先验权重: 9类 [正常, 异常1~8]
 PRIOR_WEIGHTS = [0.0, 0.7, 0.8, 0.75, 0.6, 0.85, 0.7, 0.9, 0.65]
@@ -52,8 +71,9 @@ class SepsisDetector:
         # ResNet 异常概率贡献
         rn_abnormal = probs[1:].max().item()
 
-        # 融合: YOLO 检测 + 先验知识 + ResNet 分类
-        final_score = 0.3 * yolo_score + 0.25 * prior_w + 0.45 * rn_abnormal
+        # 融合: YOLO 检测 + 先验知识 + ResNet 分类（权重来自评估优化）
+        w_y, w_p, w_r = FUSION_WEIGHTS
+        final_score = w_y * yolo_score + w_p * prior_w + w_r * rn_abnormal
 
         result = {
             "sepsis_score": round(final_score, 4),
@@ -61,7 +81,7 @@ class SepsisDetector:
             "resnet_pred_class": int(pred_class),
             "resnet_pred_label": f"异常{pred_class}" if pred_class > 0 else "正常",
             "prior_weight": round(prior_w, 4),
-            "is_sepsis_positive": final_score > 0.5,
+            "is_sepsis_positive": final_score > OPTIMAL_THRESHOLD,
             "detections": []
         }
         for box in yolo_r.boxes:

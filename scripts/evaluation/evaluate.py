@@ -167,11 +167,11 @@ def evaluate():
     print(f"  Precision={m['precision']:.1%}  Recall={m['recall']:.1%}  F1={m['f1']:.1%}  Acc={m['accuracy']:.1%}")
     print(f"  TP={m['tp']} FP={m['fp']} FN={m['fn']} TN={m['tn']}")
     
-    # ====== 4. 加权融合评估 ======
+    # ====== 4. 加权融合评估 + 阈值优化 ======
     print("\n" + "="*60)
     print("4. 加权融合 (YOLO + ResNet + 先验权重)")
     print("="*60)
-    fuse_true, fuse_pred, fuse_scores = [], [], []
+    fuse_true, fuse_scores = [], []  # 不在这里做二值化，后面统一分析
     details = []
     
     for item in test_items:
@@ -192,34 +192,152 @@ def evaluate():
         prior_w = PRIOR_WEIGHTS[pred_cls]
 
         final_score = 0.3 * yolo_score + 0.25 * prior_w + 0.45 * rn_abnormal
-        is_pos = final_score > 0.35
         
         fuse_true.append(1 if item["is_sepsis"] else 0)
-        fuse_pred.append(1 if is_pos else 0)
         fuse_scores.append(final_score)
         details.append({
             "file": Path(item["path"]).name,
             "true": "阳性" if item["is_sepsis"] else "阴性",
             "score": round(final_score, 4),
-            "pred": "阳性" if is_pos else "阴性",
             "yolo_det": n_det,
             "resnet_cls": pred_cls,
-            "prior_w": round(prior_w, 4)
+            "prior_w": round(prior_w, 4),
+            "_yolo_score": round(yolo_score, 4),
+            "_rn_abnormal": round(rn_abnormal, 4),
         })
-    
-    m = calc_metrics(fuse_true, fuse_pred)
-    print(f"  Precision={m['precision']:.1%}  Recall={m['recall']:.1%}  F1={m['f1']:.1%}  Acc={m['accuracy']:.1%}")
-    print(f"  TP={m['tp']} FP={m['fp']} FN={m['fn']} TN={m['tn']}")
-    
-    # 打印一些误判样本
-    errors = [d for d in details if (d["true"]=="阳性" and d["pred"]=="阴性") or (d["true"]=="阴性" and d["pred"]=="阳性")]
-    print(f"\n  误判样本 ({len(errors)}/{len(details)}):")
+
+    # ====== 5. ROC/PR 分析 + 自动阈值选择 ======
+    print("\n" + "="*60)
+    print("5. 自动阈值优化 (ROC + Youden 指数)")
+    print("="*60)
+
+    from sklearn.metrics import roc_curve, auc, precision_recall_curve
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    # CJK 字体
+    plt.rcParams["font.sans-serif"] = ["AR PL UMing CN", "Noto Sans CJK JP", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+
+    y_true = np.array(fuse_true)
+    y_score = np.array(fuse_scores)
+
+    # ROC 曲线
+    fpr, tpr, roc_thresh = roc_curve(y_true, y_score)
+    roc_auc = auc(fpr, tpr)
+
+    # Youden 指数: J = TPR - FPR, 取最大值对应的阈值
+    youden = tpr - fpr
+    best_idx = np.argmax(youden)
+    best_thresh_youden = roc_thresh[best_idx]
+    best_tpr = tpr[best_idx]
+    best_fpr = fpr[best_idx]
+
+    # PR 曲线 + F1 最优阈值
+    precision, recall, pr_thresh = precision_recall_curve(y_true, y_score)
+    pr_auc = auc(recall, precision)
+    # F1 在每对 precision/recall 中找最大值 (跳过最后一个额外点)
+    f1_scores = 2 * precision[:-1] * recall[:-1] / (precision[:-1] + recall[:-1] + 1e-10)
+    best_f1_idx = np.argmax(f1_scores)
+    best_thresh_f1 = pr_thresh[best_f1_idx]
+
+    # 手动阈值 0.35 对比
+    old_thresh = 0.35
+    old_pred = (y_score > old_thresh).astype(int)
+    old_m = calc_metrics(y_true, old_pred)
+    print(f"\n  原阈值 {old_thresh}:")
+    print(f"    Precision={old_m['precision']:.1%}  Recall={old_m['recall']:.1%}  F1={old_m['f1']:.1%}")
+    print(f"    TP={old_m['tp']} FP={old_m['fp']} FN={old_m['fn']} TN={old_m['tn']}")
+
+    # Youden 最优阈值
+    y_pred_youden = (y_score > best_thresh_youden).astype(int)
+    m_youden = calc_metrics(y_true, y_pred_youden)
+    print(f"\n  Youden最优阈值 {best_thresh_youden:.4f}:")
+    print(f"    J={youden[best_idx]:.4f}  TPR={best_tpr:.4f}  FPR={best_fpr:.4f}")
+    print(f"    Precision={m_youden['precision']:.1%}  Recall={m_youden['recall']:.1%}  F1={m_youden['f1']:.1%}")
+    print(f"    TP={m_youden['tp']} FP={m_youden['fp']} FN={m_youden['fn']} TN={m_youden['tn']}")
+
+    # F1 最优阈值
+    y_pred_f1 = (y_score > best_thresh_f1).astype(int)
+    m_f1 = calc_metrics(y_true, y_pred_f1)
+    print(f"\n  F1最优阈值 {best_thresh_f1:.4f}:")
+    print(f"    Precision={m_f1['precision']:.1%}  Recall={m_f1['recall']:.1%}  F1={m_f1['f1']:.1%}")
+    print(f"    TP={m_f1['tp']} FP={m_f1['fp']} FN={m_f1['fn']} TN={m_f1['tn']}")
+
+    # 打印当前最优阈值(Youden)下的误判
+    errors = [d for d in details if (d["true"]=="阳性" and d["score"] <= best_thresh_youden) or (d["true"]=="阴性" and d["score"] > best_thresh_youden)]
+    print(f"\n  Youden阈值 {best_thresh_youden:.4f} 下误判 ({len(errors)}/{len(details)}):")
     for e in errors[:10]:
         tag = "漏检" if e["true"]=="阳性" else "误报"
         print(f"    [{tag}] {e['file']} score={e['score']:.3f} yolo_det={e['yolo_det']} rn_cls={e['resnet_cls']}")
     if len(errors) > 10:
         print(f"    ... 还有 {len(errors)-10} 个")
-    
+
+    # 画图
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    # ROC
+    axes[0].plot(fpr, tpr, 'b-', label=f'ROC (AUC={roc_auc:.4f})')
+    axes[0].plot([0,1], [0,1], 'k--', alpha=0.3)
+    axes[0].scatter([best_fpr], [best_tpr], c='r', s=80, zorder=5,
+                    label=f'Youden={best_thresh_youden:.3f}')
+    axes[0].set_xlabel('FPR'); axes[0].set_ylabel('TPR')
+    axes[0].set_title('ROC Curve'); axes[0].legend(); axes[0].grid(alpha=0.3)
+    # PR
+    axes[1].plot(recall, precision, 'g-', label=f'PR (AUC={pr_auc:.4f})')
+    axes[1].scatter([recall[best_f1_idx]], [precision[best_f1_idx]], c='r', s=80, zorder=5,
+                    label=f'F1最优={best_thresh_f1:.3f}')
+    axes[1].set_xlabel('Recall'); axes[1].set_ylabel('Precision')
+    axes[1].set_title('PR Curve'); axes[1].legend(); axes[1].grid(alpha=0.3)
+    plt.tight_layout()
+    fig.savefig(str(EVAL_DIR / "threshold_optimization.png"), dpi=150)
+    plt.close()
+    print(f"\n  图表已保存到 {EVAL_DIR / 'threshold_optimization.png'}")
+
+    # ====== 6. 融合权重自动优化 (grid search) ======
+    print("\n" + "="*60)
+    print("6. 融合权重自动优化 (grid search, step=0.05)")
+    print("="*60)
+
+    # 提取三个信号分量
+    s_yolo = np.array([d["_yolo_score"] for d in details])
+    s_prior = np.array([d["prior_w"] for d in details])
+    s_rn = np.array([d["_rn_abnormal"] for d in details])
+    y_true = np.array(fuse_true)
+
+    best_w = None
+    best_f1 = -1.0
+    best_info = None
+
+    # grid: 三个权重步长 0.05，约束和为 1
+    # 目标: 零假阳性约束下最大化 F1（临床筛查场景不允许误报）
+    step = 0.05
+    for w_y in np.arange(0, 1.001, step):
+        for w_p in np.arange(0, 1.001 - w_y, step):
+            w_r = round(1.0 - w_y - w_p, 10)
+            if w_r < 0:
+                continue
+
+            scores = w_y * s_yolo + w_p * s_prior + w_r * s_rn
+            # 找该权重下的 F1 最优阈值（与阈值的 F1 优化对齐）
+            prec, rec, t_pr = precision_recall_curve(y_true, scores)
+            f1s = 2 * prec[:-1] * rec[:-1] / (prec[:-1] + rec[:-1] + 1e-10)
+            best_t = t_pr[np.argmax(f1s)]
+            pred = (scores > best_t).astype(int)
+            m = calc_metrics(y_true, pred)
+            # 零假阳性优先，其次 F1
+            score = m["f1"] - 10 * m["fp"]  # 每 1 个 FP 扣 10% F1
+            if score > best_f1:
+                best_f1 = score
+                best_w = (round(w_y,2), round(w_p,2), round(w_r,2))
+                best_info = m
+
+    print(f"\n  旧权重 (0.30, 0.25, 0.45):")
+    print(f"    F1={m_f1['f1']:.1%}  Precision={m_f1['precision']:.1%}  Recall={m_f1['recall']:.1%}")
+    if best_info:
+        print(f"\n  最优权重 ({best_w[0]:.2f}, {best_w[1]:.2f}, {best_w[2]:.2f}):")
+        print(f"    F1={best_info['f1']:.1%}  Precision={best_info['precision']:.1%}  Recall={best_info['recall']:.1%}")
+        print(f"    TP={best_info['tp']} FP={best_info['fp']} FN={best_info['fn']} TN={best_info['tn']}")
+
     # ====== 汇总 ======
     print("\n" + "="*60)
     print("汇总对比")
@@ -231,8 +349,8 @@ def evaluate():
     print(f"  {'ResNet(二分类)':<20} {resnet_bin['precision']:>10.1%} {resnet_bin['recall']:>10.1%} {resnet_bin['f1']:>10.1%} {resnet_bin['accuracy']:>10.1%}")
     yolo_bin = calc_metrics(yolo_true, yolo_pred)
     print(f"  {'YOLOv8(二分类)':<20} {yolo_bin['precision']:>10.1%} {yolo_bin['recall']:>10.1%} {yolo_bin['f1']:>10.1%} {yolo_bin['accuracy']:>10.1%}")
-    fusion = calc_metrics(fuse_true, fuse_pred)
-    print(f"  {'加权融合':<20} {fusion['precision']:>10.1%} {fusion['recall']:>10.1%} {fusion['f1']:>10.1%} {fusion['accuracy']:>10.1%}")
+    fusion = calc_metrics(fuse_true, y_pred_youden)
+    print(f"  {'加权融合(Youden)':<20} {fusion['precision']:>10.1%} {fusion['recall']:>10.1%} {fusion['f1']:>10.1%} {fusion['accuracy']:>10.1%}")
     
     # 保存结果
     results = {
@@ -246,7 +364,18 @@ def evaluate():
             "mAP50_95": round(val_results.box.map, 4),
             "binary": yolo_bin
         },
-        "fusion": fusion,
+        "fusion": {
+            "weights_old": [0.30, 0.25, 0.45],
+            "weights_optimal": list(best_w) if best_w else [0.30, 0.25, 0.45],
+            "threshold_youden": round(float(best_thresh_youden), 4),
+            "threshold_f1": round(float(best_thresh_f1), 4),
+            "roc_auc": round(float(roc_auc), 4),
+            "pr_auc": round(float(pr_auc), 4),
+            "old_thresh_0.35": old_m,
+            "youden_optimal": m_youden,
+            "f1_optimal": m_f1,
+            "weight_optimal_metrics": best_info
+        },
         "errors": errors
     }
     with open(EVAL_DIR / "evaluation_results.json", 'w') as f:

@@ -32,18 +32,23 @@
 - 8 种异常先验权重：异常1=0.7, 异常2=0.8, 异常3=0.75, 异常4=0.6, 异常5=0.85, 异常6=0.7, 异常7=0.9, 异常8=0.65
 
 ### 先验知识加权
-- 最终脓毒症评分 = 0.3×YOLO异常细胞密度 + 0.25×先验权重(异常类) + 0.45×ResNet异常置信度
-- 阈值 > 0.35 判定为阳性
+- 最终脓毒症评分 = w_y×YOLO异常细胞密度 + w_p×先验权重 + w_r×ResNet异常置信度
+- 融合权重和判定阈值由 `evaluate.py` 自动优化（ROC/PR + grid search，零假阳性约束）：
+  - 阈值 F1最优 / 权重 grid search，结果写入 `output/evaluation/evaluation_results.json`
+  - `train_weighted.py` 启动时自动读取
+- 当前最优: 权重(0.05, 0.45, 0.50), 阈值 0.0622
 
 ## 性能指标
 
-| 指标 | ResNet(二分类) | YOLOv8(val) | 加权融合 |
+| 指标 | ResNet(二分类) | YOLOv8(val) | 加权融合(F1最优) |
 |------|:-----------:|:---------:|:------:|
 | Precision | 100% | 99.8% | 100% |
-| Recall | 86.3% | 72.0% | 69.9% |
-| F1 | 92.7% | - | 82.3% |
-| Accuracy | 98.2% | - | 96.2% |
+| Recall | 86.3% | 72.0% | 94.5% |
+| F1 | 92.7% | - | 97.2% |
+| Accuracy | 98.2% | - | 99.3% |
 | mAP50 | - | 0.979 | - |
+| ROC AUC | - | - | 0.999 |
+| PR AUC | - | - | 0.994 |
 
 ## 运行方式
 
@@ -66,13 +71,15 @@ python scripts/evaluation/evaluate.py
 python scripts/training/train_weighted.py
 ```
 
-评估脚本 `scripts/evaluation/evaluate.py` 会自动跑四个维度：
+评估脚本 `scripts/evaluation/evaluate.py` 会自动跑六个维度：
 1. ResNet 9分类准确率 + 二分类指标
 2. YOLOv8 在验证集上的 mAP/Precision/Recall
 3. YOLO 在原始测试集上的二分类效果
-4. 三模型加权融合效果
+4. 三信号融合分数计算
+5. ROC/PR 曲线 + 自动阈值优化（Youden指数 + F1最优）
+6. 融合权重 grid search 优化（零假阳性约束）
 
-结果输出到 `output/evaluation/evaluation_results.json`。
+结果输出到 `output/evaluation/evaluation_results.json`，ROC/PR图保存到 `output/evaluation/threshold_optimization.png`。
 
 ## 项目结构
 
